@@ -1,0 +1,78 @@
+services:
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    ports:
+      - "8880:8880"
+    network_mode: host
+
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --dev --bind "0.0.0.0"
+    network_mode: host
+
+  whisper:
+    build:
+      context: ./whisper
+      network: host
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - whisper-data:/data
+    network_mode: host
+    command: ["vox-box", "start", "--huggingface-repo-id", "Systran/faster-whisper-small", "--data-dir", "/data", "--port", "11435"]
+
+  ollama:
+    build:
+      context: ./ollama
+      network: host
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_NUM_PARALLEL=1
+    volumes:
+      - ollama:/root/.ollama
+    network_mode: host
+
+  agent:
+    build:
+      context: ./agent
+      network: host
+    environment:
+      - LIVEKIT_URL=ws://localhost:7880
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=secret
+      - LIVEKIT_AGENT_PORT=7880
+      - OPENAI_API_KEY=no-key-needed
+      - GROQ_API_KEY=no-key-needed
+      - WHISPER_URL=http://localhost:11435/v1
+      - OLLAMA_URL=http://localhost:11434/v1
+      - KOKORO_URL=http://localhost:8880/v1
+    depends_on:
+      - livekit
+      - kokoro
+      - whisper
+      - ollama
+    network_mode: host
+
+  frontend:
+    build:
+      context: ./voice-assistant-frontend
+      network: host
+    environment:
+      - NEXT_PUBLIC_LIVEKIT_URL=ws://localhost:7880
+      - LIVEKIT_URL=ws://localhost:7880
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=secret
+      - NEXT_PUBLIC_LIVEKIT_API_KEY=devkey
+    depends_on:
+      - livekit
+    network_mode: host
+
+volumes:
+  ollama:
+  whisper-data:
