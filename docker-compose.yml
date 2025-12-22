@@ -1,6 +1,10 @@
 services:
   kokoro:
-    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    image: dustynv/kokoro-tts:fastapi-r36.4.0-cu128-24.04
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     ports:
       - "8880:8880"
     network_mode: host
@@ -21,7 +25,7 @@ services:
     volumes:
       - whisper-data:/data
     network_mode: host
-    command: ["vox-box", "start", "--huggingface-repo-id", "Systran/faster-whisper-small", "--data-dir", "/data", "--port", "11435"]
+    command: ["vox-box", "start", "--huggingface-repo-id", "Systran/faster-whisper-small", "--data-dir", "/data", "--port", "11435", "--device", "cuda"]
 
   ollama:
     build:
@@ -59,16 +63,16 @@ services:
       - ollama
     network_mode: host
 
-  frontend:
+  playground:
     build:
-      context: ./voice-assistant-frontend
+      context: ../agents-playground
       network: host
+      args:
+        NEXT_PUBLIC_LIVEKIT_URL: ws://localhost:7880
     environment:
-      - NEXT_PUBLIC_LIVEKIT_URL=ws://localhost:7880
-      - LIVEKIT_URL=ws://localhost:7880
       - LIVEKIT_API_KEY=devkey
       - LIVEKIT_API_SECRET=secret
-      - NEXT_PUBLIC_LIVEKIT_API_KEY=devkey
+      - NEXT_PUBLIC_LIVEKIT_URL=ws://localhost:7880
     depends_on:
       - livekit
     network_mode: host

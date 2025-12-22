@@ -19,12 +19,15 @@ RUN adduser \
     --uid "${UID}" \
     appuser
 
+RUN chown -R appuser:appuser /home/appuser
+
 # Install gcc, g++ and other build dependencies.
 RUN apt-get update && \
     apt-get install -y \
     gcc \
     g++ \
     python3-dev \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 USER appuser
@@ -34,10 +37,10 @@ RUN chown -R appuser /home/appuser/.cache
 
 WORKDIR /home/appuser
 
-COPY requirements.txt .
+COPY --chown=appuser:appuser requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY --chown=appuser:appuser . .
 
 ENTRYPOINT ["python", "myagent.py"]
 CMD ["start"]
