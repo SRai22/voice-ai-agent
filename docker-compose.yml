@@ -9,11 +9,6 @@ services:
       - "8880:8880"
     network_mode: host
 
-  livekit:
-    image: livekit/livekit-server:latest
-    command: --dev --bind "0.0.0.0"
-    network_mode: host
-
   whisper:
     build:
       context: ./whisper
@@ -44,37 +39,32 @@ services:
 
   agent:
     build:
-      context: ./medical_office_agent
+      context: ./agent
       network: host
     environment:
-      - LIVEKIT_URL=ws://localhost:7880
-      - LIVEKIT_API_KEY=devkey
-      - LIVEKIT_API_SECRET=secret
-      - LIVEKIT_AGENT_PORT=7880
-      - OPENAI_API_KEY=no-key-needed
       - WHISPER_URL=http://localhost:11435/v1
       - OLLAMA_URL=http://localhost:11434/v1
       - KOKORO_URL=http://localhost:8880/v1
     depends_on:
-      - livekit
       - kokoro
       - whisper
       - ollama
     network_mode: host
+    ports:
+      - "7860:7860"
 
-  playground:
+  frontend:
     build:
-      context: ../agents-playground
+      context: ./frontend
       network: host
-      args:
-        NEXT_PUBLIC_LIVEKIT_URL: ws://localhost:7880
     environment:
-      - LIVEKIT_API_KEY=devkey
-      - LIVEKIT_API_SECRET=secret
-      - NEXT_PUBLIC_LIVEKIT_URL=ws://localhost:7880
+      - AGENT_URL=http://localhost:7860/api/offer
+      - HOSTNAME=0.0.0.0
     depends_on:
-      - livekit
+      - agent
     network_mode: host
+    ports:
+      - "3000:3000"
 
 volumes:
   ollama:
