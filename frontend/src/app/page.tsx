@@ -16,7 +16,7 @@ export default function Home() {
       <PipecatAppBase
         transportType="smallwebrtc"
         connectParams={{
-          webrtcUrl: "/api/offer",
+          url: "/api/offer",
         }}
       >
         {({

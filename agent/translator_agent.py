@@ -3,13 +3,10 @@ Bilingual Translation Agent using Pipecat Framework.
 Automatically detects language and translates English ↔ Spanish.
 """
 
-import asyncio
 import os
 import re
-import sys
 from typing import Dict, Optional
 
-import aiohttp
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI
@@ -17,9 +14,8 @@ from loguru import logger
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
-    EndFrame,
     Frame,
-    LLMMessagesFrame,
+    LLMRunFrame,
     TextFrame,
     TranscriptionFrame,
 )
@@ -29,35 +25,29 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.transports.base_transport import TransportParams
-from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIObserver, RTVIProcessor
+from pipecat.runner.types import RunnerArguments
+from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection, IceServer
+from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 # Import custom local service wrappers
 from services.local_whisper_stt import LocalWhisperSTTService
 from services.local_ollama_llm import LocalOllamaLLMService
 from services.local_kokoro_tts import LocalKokoroTTSService
 
-load_dotenv()
+load_dotenv(override=True)
 
-# FastAPI app for WebRTC endpoints
+# FastAPI app for local development with frontend compatibility
 app = FastAPI()
 
-# Store connections by pc_id
+# Store connections by pc_id for frontend compatibility
 pcs_map: Dict[str, SmallWebRTCConnection] = {}
 
 # ICE servers configuration
 ice_servers = [
     IceServer(urls="stun:stun.l.google.com:19302")
 ]
-
-# Configure logging
-logger.remove()
-logger.add(
-    sys.stderr,
-    colorize=True,
-    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
-)
 
 
 # Spanish character pattern for language detection
@@ -221,12 +211,12 @@ Remember: You are a one-way translator (Spanish → English only)."""
         """Switch translation mode and TTS voice based on detected language."""
         if language == "es":
             # Spanish input → English output
-            logger.info("🔄 Switching to Spanish→English translation mode")
+            logger.info("Switching to Spanish→English translation mode")
             system_instruction = self._spanish_to_english_instruction
             tts_voice = "af_nicole"  # English voice for output
         else:
             # English input → Spanish output
-            logger.info("🔄 Switching to English→Spanish translation mode")
+            logger.info("Switching to English→Spanish translation mode")
             system_instruction = self._english_to_spanish_instruction
             tts_voice = "ef_dora"  # Spanish voice for output
 
@@ -244,10 +234,17 @@ Remember: You are a one-way translator (Spanish → English only)."""
         logger.info(f"✓ Updated TTS voice to: {tts_voice}")
 
 
-async def run_bot(transport):
+async def run_bot(transport: BaseTransport, runner_args: Optional[RunnerArguments] = None):
+    """Run the translation bot with the provided transport.
+
+    Args:
+        transport (BaseTransport): The transport to use for communication.
+        runner_args: runner session arguments (optional for local mode)
     """
-    Main bot logic: Sets up pipeline with STT, LLM, TTS, and language detection.
-    """
+    if runner_args:
+        logger.info(f"RunnerArguments custom data: {runner_args.body}")
+    else:
+        logger.info("Running in local development mode")
     
     # Initialize AI services with local endpoints
     stt = LocalWhisperSTTService(
@@ -267,16 +264,14 @@ async def run_bot(transport):
     )
 
     # Create LLM context with initial system message (English→Spanish)
-    context = LLMContext(
-        messages=[
-            {
-                "role": "system",
-                "content": "You are an English to Spanish translator. Translate the user's English text to Spanish.",
-            }
-        ]
-    )
-
-    # Create response aggregators using modern API
+    messages = [
+        {
+            "role": "system",
+            "content": "You are an English to Spanish translator. Translate the user's English text to Spanish.",
+        }
+    ]
+    
+    context = LLMContext(messages)
     context_aggregator = LLMContextAggregatorPair(context)
 
     # Create language detection processor
@@ -285,10 +280,14 @@ async def run_bot(transport):
     # Create text filter to prevent empty strings from reaching TTS
     text_filter = TextFilterProcessor()
 
+    # RTVI events for Pipecat client UI
+    rtvi = RTVIProcessor(config=RTVIConfig(config=[]))
+
     # Build pipeline: order matters!
     pipeline = Pipeline(
         [
             transport.input(),  # Receive audio from user
+            rtvi,  # RTVI processor for client events
             stt,  # Speech → Text (transcription)
             language_detector,  # Detect language & switch mode
             context_aggregator.user(),  # Add user message to LLM context
@@ -308,39 +307,68 @@ async def run_bot(transport):
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
+        observers=[RTVIObserver(rtvi)],
     )
 
     # Event handlers
+    @rtvi.event_handler("on_client_ready")
+    async def on_client_ready(rtvi):
+        logger.debug("Client ready event received")
+        await rtvi.set_bot_ready()
+
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
-        logger.info(f"Client connected: {client}")
-        # Send initial greeting
-        await task.queue_frames(
-            [
-                LLMMessagesFrame(
-                    [
-                        {
-                            "role": "system",
-                            "content": "Greet the user by saying: Hello, I am your English to Spanish translator. Speak to me in English and I will translate to Spanish, or speak Spanish and I will translate to English.",
-                        }
-                    ]
-                )
-            ]
-        )
+        logger.info("Client connected.")
+        # Kick off the conversation
+        await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
-    async def on_client_disconnected(transport, client):
-        logger.info(f"Client disconnected: {client}")
+    async def on_client_disconnected(transport, participant):
+        logger.info("Client disconnected: {}", participant)
         await task.cancel()
 
     # Run the pipeline
-    runner = PipelineRunner()
+    runner = PipelineRunner(handle_sigint=runner_args.handle_sigint if runner_args else False)
     await runner.run(task)
 
 
+async def bot(runner_args: RunnerArguments):
+    """Main bot entry point compatible with Pipecat Cloud."""
+    logger.info(f"Starting the bot, received body: {runner_args.body}")
+    webrtc_connection: SmallWebRTCConnection = runner_args.webrtc_connection
+    try:
+        if os.environ.get("ENV") != "local":
+            from pipecat.audio.filters.krisp_filter import KrispFilter
+
+            krisp_filter = KrispFilter()
+        else:
+            krisp_filter = None
+
+        transport = SmallWebRTCTransport(
+            webrtc_connection=webrtc_connection,
+            params=TransportParams(
+                audio_in_enabled=True,
+                audio_in_filter=krisp_filter,
+                audio_out_enabled=True,
+                vad_analyzer=SileroVADAnalyzer(),
+            ),
+        )
+
+        if transport is None:
+            logger.error("Failed to create transport")
+            return
+
+        await run_bot(transport, runner_args)
+        logger.info("Bot process completed")
+    except Exception as e:
+        logger.exception(f"Error in bot process: {str(e)}")
+        raise
+
+
+# FastAPI endpoints for frontend compatibility (local development)
 @app.post("/api/offer")
 async def offer(request: dict, background_tasks: BackgroundTasks):
-    """Handle WebRTC offer and create connection."""
+    """Handle WebRTC offer from frontend - local development mode."""
     pc_id = request.get("pc_id")
 
     if pc_id and pc_id in pcs_map:
@@ -361,20 +389,18 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
             if webrtc_connection.pc_id in pcs_map:
                 del pcs_map[webrtc_connection.pc_id]
 
-        # Create transport and run bot
+        # Create transport directly for local mode
         transport = SmallWebRTCTransport(
             webrtc_connection=pipecat_connection,
             params=TransportParams(
                 audio_in_enabled=True,
                 audio_out_enabled=True,
-                vad_enabled=True,
                 vad_analyzer=SileroVADAnalyzer(),
-                vad_audio_passthrough=True,
-            )
+            ),
         )
-        
-        # Run bot in background
-        background_tasks.add_task(run_bot, transport)
+
+        # Run bot in background without RunnerArguments (local mode)
+        background_tasks.add_task(run_bot, transport, None)
 
     answer = pipecat_connection.get_answer()
     pcs_map[answer["pc_id"]] = pipecat_connection
@@ -384,7 +410,7 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
 
 @app.patch("/api/offer")
 async def patch_offer(request: dict):
-    """Handle ICE candidate updates."""
+    """Handle ICE candidate updates from frontend."""
     pc_id = request.get("pc_id")
     
     if not pc_id or pc_id not in pcs_map:
@@ -401,8 +427,19 @@ async def patch_offer(request: dict):
 
 
 if __name__ == "__main__":
-    logger.info("🤖 Starting Bilingual Translation Agent (Pipecat + SmallWebRTC)")
-    logger.info("🌐 WebRTC transport available on port 7860")
-    logger.info("📝 Speak in English or Spanish - I'll translate to the other language!")
+    # Check if running in Pipecat Cloud mode or local development mode
+    use_cloud_runner = os.getenv("PIPECAT_CLOUD", "false").lower() == "true"
     
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    if use_cloud_runner:
+        # Use Pipecat Cloud runner
+        from pipecat.runner.run import main
+        
+        logger.info("🤖 Starting in Pipecat Cloud mode")
+        main()
+    else:
+        # Use local FastAPI server for frontend compatibility
+        logger.info("🤖 Starting Bilingual Translation Agent (Local Development)")
+        logger.info("🌐 WebRTC transport available on port 7860")
+        logger.info("📝 Speak in English or Spanish - I'll translate to the other language!")
+        
+        uvicorn.run(app, host="0.0.0.0", port=7860)

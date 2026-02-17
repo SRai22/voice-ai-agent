@@ -24,10 +24,10 @@ if [ $READY -eq 0 ]; then
 fi
 
 # Check if model exists, if not pull it
-if ! curl -s http://localhost:11434/api/tags | grep -q "qwen2.5:3b"; then
-    echo "Downloading qwen2.5:3b model..."
-    if ! ollama pull qwen2.5:3b; then
-        echo "ERROR: Failed to download qwen2.5:3b model"
+if ! curl -s http://localhost:11434/api/tags | grep -q "gemma3:1b"; then
+    echo "Downloading gemma3:1b model..."
+    if ! ollama pull gemma3:1b; then
+        echo "ERROR: Failed to download gemma3:1b model"
         exit 1
     fi
     echo "Model downloaded successfully!"
