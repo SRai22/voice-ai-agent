@@ -11,7 +11,7 @@ services:
 
   livekit:
     image: livekit/livekit-server:latest
-    command: --dev --bind "0.0.0.0"
+    command: --dev --bind "0.0.0.0" --node-ip "192.168.128.8"
     network_mode: host
 
   whisper:
@@ -74,6 +74,31 @@ services:
       - NEXT_PUBLIC_LIVEKIT_URL=ws://localhost:7880
     depends_on:
       - livekit
+    network_mode: host
+
+  meet:
+    build:
+      context: ./meet
+      network: host
+      args:
+        NEXT_PUBLIC_LIVEKIT_URL: wss://192.168.128.8:8443
+    environment:
+      - LIVEKIT_URL=http://192.168.128.8:7880
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=secret
+      - NEXT_PUBLIC_LIVEKIT_URL=wss://192.168.128.8:8443
+    depends_on:
+      - livekit
+    network_mode: host
+
+  meet-nginx:
+    build:
+      context: ./meet
+      dockerfile: Dockerfile.nginx
+    volumes:
+      - ./meet/certs:/etc/nginx/certs:ro
+    depends_on:
+      - meet
     network_mode: host
 
 volumes:
